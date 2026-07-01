@@ -13,7 +13,7 @@ def get_data():
 
 
 def init_network():
-    with open("sample_weight.pkl", 'rb') as f:
+    with open(os.path.dirname(os.path.abspath(__file__)) + "/sample_weight.pkl", 'rb') as f:
         network = pickle.load(f)
     return network
 
