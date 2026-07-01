@@ -1,6 +1,6 @@
 # coding: utf-8
 import sys, os
-sys.path.append(os.pardir)  # 为了导入父目录中的文件而进行的设定
+sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/..")  # 为了导入父目录的文件而进行的设定
 import numpy as np
 from common.functions import softmax, cross_entropy_error
 from common.gradient import numerical_gradient

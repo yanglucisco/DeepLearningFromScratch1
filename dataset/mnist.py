@@ -1,6 +1,7 @@
 # coding: utf-8
 try:
     import urllib.request
+    import urllib.error
 except ImportError:
     raise ImportError('You should use Python 3.x')
 import os.path
@@ -10,7 +11,8 @@ import os
 import numpy as np
 
 
-url_base = 'http://yann.lecun.com/exdb/mnist/'
+url_base = 'https://storage.googleapis.com/cvdf-datasets/mnist/'
+url_base_fallback = 'https://ossci-datasets.s3.amazonaws.com/mnist/'
 key_file = {
     'train_img':'train-images-idx3-ubyte.gz',
     'train_label':'train-labels-idx1-ubyte.gz',
@@ -29,13 +31,23 @@ img_size = 784
 
 def _download(file_name):
     file_path = dataset_dir + "/" + file_name
-    
+
     if os.path.exists(file_path):
         return
 
-    print("Downloading " + file_name + " ... ")
-    urllib.request.urlretrieve(url_base + file_name, file_path)
-    print("Done")
+    for i, base in enumerate([url_base, url_base_fallback]):
+        try:
+            print("Downloading " + file_name + " from " + base + " ... ")
+            urllib.request.urlretrieve(base + file_name, file_path)
+            print("Done")
+            return
+        except (urllib.error.URLError, urllib.error.HTTPError) as e:
+            print("Failed: " + str(e))
+            if i == 0:
+                print("Switching to fallback mirror...")
+            else:
+                raise Exception("All mirrors failed to download " + file_name)
+
     
 def download_mnist():
     for v in key_file.values():
