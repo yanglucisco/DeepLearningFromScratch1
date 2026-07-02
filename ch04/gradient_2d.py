@@ -59,7 +59,7 @@ if __name__ == '__main__':
     grad = numerical_gradient(function_2, np.array([X, Y]).T)
     
     plt.figure()
-    plt.quiver(X, Y, -grad[0], -grad[1],  angles="xy",color="#666666")#,headwidth=10,scale=40,color="#444444")
+    plt.quiver(X, Y, -grad.T[0], -grad.T[1],  angles="xy",color="#666666")#,headwidth=10,scale=40,color="#444444")
     plt.xlim([-2, 2])
     plt.ylim([-2, 2])
     plt.xlabel('x0')
@@ -68,3 +68,4 @@ if __name__ == '__main__':
     plt.legend()
     plt.draw()
     plt.show()
+    input("按 Enter 键退出...")
