@@ -28,6 +28,8 @@ plt.ylabel("f(x)")
 tf = tangent_line(function_1, 5)
 y2 = tf(x)
 
+# 测试git冲突解决方法
+
 plt.plot(x, y)
 plt.plot(x, y2)
 plt.show()
