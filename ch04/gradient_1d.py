@@ -23,6 +23,8 @@ y = function_1(x)
 plt.xlabel("x")
 plt.ylabel("f(x)")
 
+# 随便写点东西，测试git如何解决冲突
+
 tf = tangent_line(function_1, 5)
 y2 = tf(x)
 
