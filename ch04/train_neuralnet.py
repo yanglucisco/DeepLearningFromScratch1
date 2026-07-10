@@ -55,4 +55,11 @@ plt.ylabel("accuracy")
 plt.ylim(0, 1.0)
 plt.legend(loc='lower right')
 plt.show()
+
+# 保存训练好的参数
+import pickle
+with open("ch04/network_params.pkl", "wb") as f:
+    pickle.dump(network.params, f)
+print("参数已保存到 ch04/network_params.pkl")
+
 input("按 Enter 键退出...")
