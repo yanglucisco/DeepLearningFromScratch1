@@ -1,2 +1,6 @@
 numpy
 matplotlib
+transformers
+torch
+accelerate
+sentencepiece
