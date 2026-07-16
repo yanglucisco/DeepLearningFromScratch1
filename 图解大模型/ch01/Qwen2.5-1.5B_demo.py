@@ -198,7 +198,8 @@ def generate_text(model, tokenizer, input_ids: list[int], formatted_prompt: str,
     print()
 
     t0 = time.time()
-
+    print("开始打印模型")
+    print(model)
     with torch.no_grad():
         output = model.generate(
             input_ids=torch.tensor([input_ids]),
@@ -264,22 +265,22 @@ def main():
     # ── 新增：演示 "Hello World" 的嵌入向量 ──────────────
     _ = get_embedding(model, tokenizer, "Hello World")
 
-    # ids, formatted = tokenize_input(tokenizer, USER_MSG)
+    ids, formatted = tokenize_input(tokenizer, USER_MSG)
 
-    # result = generate_text(model, tokenizer, ids, formatted)
+    result = generate_text(model, tokenizer, ids, formatted)
 
-    # print("=" * 70)
-    # print("  [流程总结]")
-    # print("=" * 70)
-    # print("  1. 模型加载 | Qwen2.5-1.5B-Instruct（1.5B params）")
-    # print(f"  2. 聊天模板 | 自动添加 <|im_start|> 标记")
-    # print(f"  3. 分词编码 | {len(ids)} tokens -> ID 序列")
-    # print("  4. 模型推理 | 自回归生成 (temperature=0.7, top_k=50)")
-    # print("  5. 逐 token | 每步生成概率最高的子词")
-    # print("  6. 解码输出 | token IDs -> 可读文本")
-    # print()
-    # print(f"  💡 Qwen2.5-1.5B 是 Instruct 模型，能理解指令、生成符合要求的文本。")
-    # print(f"     相比 GPT-2 的随机续写，Instruct 模型的输出更有针对性。")
+    print("=" * 70)
+    print("  [流程总结]")
+    print("=" * 70)
+    print("  1. 模型加载 | Qwen2.5-1.5B-Instruct（1.5B params）")
+    print(f"  2. 聊天模板 | 自动添加 <|im_start|> 标记")
+    print(f"  3. 分词编码 | {len(ids)} tokens -> ID 序列")
+    print("  4. 模型推理 | 自回归生成 (temperature=0.7, top_k=50)")
+    print("  5. 逐 token | 每步生成概率最高的子词")
+    print("  6. 解码输出 | token IDs -> 可读文本")
+    print()
+    print(f"  💡 Qwen2.5-1.5B 是 Instruct 模型，能理解指令、生成符合要求的文本。")
+    print(f"     相比 GPT-2 的随机续写，Instruct 模型的输出更有针对性。")
 
 
 if __name__ == "__main__":
