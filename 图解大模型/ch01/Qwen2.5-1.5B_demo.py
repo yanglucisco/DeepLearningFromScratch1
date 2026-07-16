@@ -25,7 +25,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 
 MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
-USER_MSG = "Write an email apologizing to Sarah for the tragic gardening mishap. Explain how it happened."
+USER_MSG = "简单描述下唐朝的历史"
 
 
 def load_model_and_tokenizer():
@@ -115,7 +115,81 @@ def tokenize_input(tokenizer, user_msg: str) -> tuple[list[int], str]:
     return ids, formatted
 
 
-def generate_text(model, tokenizer, input_ids: list[int], formatted_prompt: str, max_new_tokens=120):
+def get_embedding(model, tokenizer, text: str = "Hello World"):
+    """
+    演示文本嵌入向量的提取过程。
+    输入一句话，获取模型中每个 token 的隐藏状态和句子级嵌入。
+    """
+    print("=" * 70)
+    print("  [嵌入向量演示] 提取文本的语义表示")
+    print("=" * 70)
+    print()
+
+    # ── 分词 ──────────────────────────────────────────────
+    print(f"  输入文本：{text}")
+    tokens = tokenizer.tokenize(text)
+    input_ids = tokenizer.encode(text, add_special_tokens=True)
+    print(f"  Token 数：{len(tokens)}")
+    print(f"  Token 列表：{tokens}")
+    print(f"  ID 列表：{input_ids}")
+    print()
+
+    # ── 单次前向传播，获取所有层的隐藏状态 ────────────────
+    with torch.no_grad():
+        inputs = tokenizer(text, return_tensors="pt")
+        outputs = model(**inputs, output_hidden_states=True)
+
+    # 最后一层的隐藏状态: (1, seq_len, hidden_dim)
+    last_hidden = outputs.hidden_states[-1]
+    batch, seq_len, hidden_dim = last_hidden.shape
+
+    print(f"  模型配置信息：")
+    print(f"  | 隐藏层维度 (hidden_size)：{hidden_dim}")
+    print(f"  | 注意力头数 (num_attention_heads)："
+          f"{model.config.num_attention_heads}")
+    print(f"  | 层数 (num_hidden_layers)："
+          f"{model.config.num_hidden_layers}")
+    print(f"  | 中间层维度 (intermediate_size)："
+          f"{model.config.intermediate_size}")
+    print()
+
+    # ── 展示各 token 的嵌入向量（前 6 维 + 总维数） ────────
+    print(f"  各 Token 嵌入向量（显示前 6 维，总维数 {hidden_dim}）：")
+    for i, token in enumerate(tokens):
+        vec = last_hidden[0, i, :6].tolist()
+        fmt = ", ".join(f"{v:+.4f}" for v in vec)
+        print(f"    [{i}] \"{token}\"  →  [{fmt}, ...]  (dim={hidden_dim})")
+    print()
+
+    # ── 句子级嵌入（均值池化） ─────────────────────────────
+    sentence_emb = last_hidden.mean(dim=1).squeeze()  # (hidden_dim,)
+    print(f"  句子级嵌入向量（对所有 token 隐藏状态取均值池化，总维数 {list(sentence_emb.shape)[0]}）：")
+    first_vals = sentence_emb[:6].tolist()
+    fmt = ", ".join(f"{v:+.4f}" for v in first_vals)
+    print(f"    前 6 维：[{fmt}, ...]")
+    print()
+
+    # ── 向量统计信息 ──────────────────────────────────────
+    norm = torch.norm(sentence_emb, p=2).item()
+    mean_val = sentence_emb.mean().item()
+    std_val = sentence_emb.std().item()
+    print(f"  向量统计：")
+    print(f"  | L2 范数：{norm:.4f}")
+    print(f"  | 均值：{mean_val:.6f}")
+    print(f"  | 标准差：{std_val:.6f}")
+    print(f"  | 最小值：{sentence_emb.min().item():.6f}")
+    print(f"  | 最大值：{sentence_emb.max().item():.6f}")
+    print()
+
+    print(f"  💡 嵌入向量是 LLM 对文本的\"理解\"表示，")
+    print(f"     将文本映射到 {hidden_dim} 维语义空间。")
+    print(f"     语义相似的句子在嵌入空间中距离更近。")
+    print()
+
+    return last_hidden
+
+
+def generate_text(model, tokenizer, input_ids: list[int], formatted_prompt: str, max_new_tokens=1200):
     """模型推理生成并展示逐步解码过程。"""
     print("=" * 70)
     print("  [生成阶段] 自回归逐 token 生成")
@@ -187,22 +261,25 @@ def generate_text(model, tokenizer, input_ids: list[int], formatted_prompt: str,
 def main():
     model, tokenizer = load_model_and_tokenizer()
 
-    ids, formatted = tokenize_input(tokenizer, USER_MSG)
+    # ── 新增：演示 "Hello World" 的嵌入向量 ──────────────
+    _ = get_embedding(model, tokenizer, "Hello World")
 
-    result = generate_text(model, tokenizer, ids, formatted)
+    # ids, formatted = tokenize_input(tokenizer, USER_MSG)
 
-    print("=" * 70)
-    print("  [流程总结]")
-    print("=" * 70)
-    print("  1. 模型加载 | Qwen2.5-1.5B-Instruct（1.5B params）")
-    print(f"  2. 聊天模板 | 自动添加 <|im_start|> 标记")
-    print(f"  3. 分词编码 | {len(ids)} tokens -> ID 序列")
-    print("  4. 模型推理 | 自回归生成 (temperature=0.7, top_k=50)")
-    print("  5. 逐 token | 每步生成概率最高的子词")
-    print("  6. 解码输出 | token IDs -> 可读文本")
-    print()
-    print(f"  💡 Qwen2.5-1.5B 是 Instruct 模型，能理解指令、生成符合要求的文本。")
-    print(f"     相比 GPT-2 的随机续写，Instruct 模型的输出更有针对性。")
+    # result = generate_text(model, tokenizer, ids, formatted)
+
+    # print("=" * 70)
+    # print("  [流程总结]")
+    # print("=" * 70)
+    # print("  1. 模型加载 | Qwen2.5-1.5B-Instruct（1.5B params）")
+    # print(f"  2. 聊天模板 | 自动添加 <|im_start|> 标记")
+    # print(f"  3. 分词编码 | {len(ids)} tokens -> ID 序列")
+    # print("  4. 模型推理 | 自回归生成 (temperature=0.7, top_k=50)")
+    # print("  5. 逐 token | 每步生成概率最高的子词")
+    # print("  6. 解码输出 | token IDs -> 可读文本")
+    # print()
+    # print(f"  💡 Qwen2.5-1.5B 是 Instruct 模型，能理解指令、生成符合要求的文本。")
+    # print(f"     相比 GPT-2 的随机续写，Instruct 模型的输出更有针对性。")
 
 
 if __name__ == "__main__":
