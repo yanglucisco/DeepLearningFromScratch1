@@ -53,9 +53,18 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # 训练超参数
 BATCH_SIZE = 4
 LEARNING_RATE = 2e-5
-EPOCHS = 10
+EPOCHS = 3
 MAX_LENGTH = 128
 WARMUP_STEPS = 0
+
+# ── 数据集配置 ──────────────────────────────────────────────────────
+# True  = 使用 IMDB 大型数据集（50K 条，效果更好但训练更慢）
+# False = 使用手写的小数据集（32 条，快速验证）
+USE_IMDB_DATASET = True
+
+# 使用 IMDB 时随机抽取的样本数（设为 0 则使用全部 25K 条）
+# CPU 建议 1000~2000，GPU 可用全部
+IMDB_SAMPLE_SIZE = 2000
 
 # 微调模型的本地保存路径
 SAVE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -121,6 +130,140 @@ TEST_DATA = [
     ("Not my cup of tea, but the acting was solid.", 1),
     ("这片子唯一的优点就是片尾字幕终于出来了", 0),
 ]
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  1.5 加载 IMDB 数据集（从 hf-mirror.com 自动下载）
+# ══════════════════════════════════════════════════════════════════════
+
+def load_imdb_data(sample_size=2000, seed=42):
+    """从 HuggingFace Hub 加载 IMDB 电影评价数据集。
+
+    IMDB 数据集概况：
+      - 50,000 条电影评价（训练 25K / 测试 25K）
+      - 标签：0=负面 (评分≤4), 1=正面 (评分≥7)
+      - 中立评价（评分 5~6）被过滤，确保标签明确
+      - 数据来源：imdb.com 用户影评
+
+    参数：
+      sample_size: 随机抽取的样本数（减少 CPU 训练时间，0=全部使用）
+      seed: 随机种子，保证每次抽取相同样本
+
+    返回：
+      train_data: list of (text, label)，加载失败返回 None
+      test_data:  list of (text, label)，加载失败返回 None
+    """
+    print("=" * 70)
+    print("  📦 加载 IMDB 电影评价数据集")
+    print("=" * 70)
+    print()
+    print("  来源：huggingface.co/datasets/imdb（清华大学镜像加速）")
+    print("  原始规模：训练 25,000 / 测试 25,000")
+    print()
+
+    # ── 检查依赖 ──
+    try:
+        from datasets import load_dataset
+    except ImportError:
+        print("  ❌ 未安装 datasets 库")
+        print("     请运行：pip install datasets")
+        print("     回退到手写小数据集...")
+        return None, None
+
+    # ── 尝试加载（捕获所有异常，确保不回退失败） ──
+    dataset = None
+    errors = []
+
+    # 方式 1：走 hf-mirror.com 镜像
+    try:
+        print("  [1/2] 从 hf-mirror.com 下载 IMDB 数据集...")
+        # datasets 库也认 HF_ENDPOINT 环境变量
+        dataset = load_dataset("stanfordnlp/imdb", trust_remote_code=True)
+    except Exception as e:
+        errors.append(f"镜像失败: {e}")
+
+    # 方式 2：不走镜像，直连 HuggingFace（如果开了代理）
+    if dataset is None:
+        try:
+            print("  ⚠ 镜像失败，尝试直连 HuggingFace...")
+            old_endpoint = os.environ.pop("HF_ENDPOINT", None)
+            dataset = load_dataset("stanfordnlp/imdb", trust_remote_code=True)
+            # 恢复环境变量
+            if old_endpoint:
+                os.environ["HF_ENDPOINT"] = old_endpoint
+        except Exception as e:
+            errors.append(f"直连失败: {e}")
+            if old_endpoint:
+                os.environ["HF_ENDPOINT"] = old_endpoint
+
+    # 方式 3：从本地缓存加载（如果之前成功下载过）
+    if dataset is None:
+        try:
+            print("  ⚠ 尝试从本地缓存加载...")
+            from datasets import load_from_disk
+            cache_dir = os.path.expanduser("~/.cache/huggingface/datasets/imdb")
+            dataset = load_from_disk(cache_dir)
+        except Exception:
+            errors.append("本地缓存也不可用")
+
+    # ── 全部失败 ──
+    if dataset is None:
+        print()
+        print("  ❌ 加载 IMDB 数据集失败！")
+        for err in errors:
+            print(f"     • {err}")
+        print()
+        print("  🔧 排查建议：")
+        print("     1. pip install datasets  (确保已安装)")
+        print("     2. 检查网络连接（hf-mirror.com 是否可访问）")
+        print("     3. 如用代理，检查代理设置")
+        print("     4. 设 USE_IMDB_DATASET = False 使用手写数据")
+        print()
+        print("     ⬇ 自动回退到手写小数据集，继续运行...")
+        print()
+        return None, None
+
+    # ── 加载成功 ──
+    print(f"  OK | 训练集: {len(dataset['train']):,} 条")
+    print(f"  OK | 测试集: {len(dataset['test']):,} 条")
+    print()
+
+    # ── 抽样（如果指定了 sample_size） ──
+    if sample_size and sample_size > 0:
+        print(f"  [2/2] 随机抽取 {sample_size:,} 条（加速 CPU 训练）...")
+        half = sample_size // 2
+
+        train_df = dataset["train"].to_pandas()
+        pos_train = train_df[train_df["label"] == 1].sample(half, random_state=seed)
+        neg_train = train_df[train_df["label"] == 0].sample(half, random_state=seed)
+        train_sampled = list(pos_train.itertuples()) + list(neg_train.itertuples())
+
+        test_half = min(500, sample_size // 4)
+        test_df = dataset["test"].to_pandas()
+        pos_test = test_df[test_df["label"] == 1].sample(test_half, random_state=seed)
+        neg_test = test_df[test_df["label"] == 0].sample(test_half, random_state=seed)
+        test_sampled = list(pos_test.itertuples()) + list(neg_test.itertuples())
+
+        import random
+        train_data = [(row.text, row.label) for row in train_sampled]
+        test_data = [(row.text, row.label) for row in test_sampled]
+        random.Random(seed).shuffle(train_data)
+    else:
+        print(f"  [2/2] 使用全部数据（训练较慢，效果更好）...")
+        train_data = [(row["text"], row["label"]) for row in dataset["train"]]
+        test_data = [(row["text"], row["label"]) for row in dataset["test"]]
+
+    pos_count = sum(1 for _, lbl in train_data if lbl == 1)
+    neg_count = sum(1 for _, lbl in train_data if lbl == 0)
+    print(f"  OK | 训练集: {len(train_data):,} 条（正面 {pos_count} / 负面 {neg_count}）")
+    print(f"  OK | 测试集: {len(test_data):,} 条")
+    print()
+    print(f"  💡 IMDB 数据集每条评价平均 200+ 单词，")
+    print(f"     涵盖各种写作风格（专业影评人到普通观众），")
+    print(f"     是情感分类任务的经典基准数据集。")
+    print()
+
+    return train_data, test_data
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -278,8 +421,12 @@ def evaluate(model, dataloader):
 #  5. 训练循环
 # ══════════════════════════════════════════════════════════════════════
 
-def train(model, tokenizer):
+def train(model, tokenizer, train_data=None, test_data=None, epochs=None):
     """主训练流程。
+
+    参数：
+      train_data, test_data: 如果不传，默认使用全局的 TRAIN_DATA / TEST_DATA
+      epochs: 如果不传，默认使用全局 EPOCHS
 
     步骤：
       1. 构建 DataLoader
@@ -287,21 +434,28 @@ def train(model, tokenizer):
       3. 每个 epoch：训练 → 评估 → 打印指标
       4. 保存最佳模型
     """
+    if train_data is None:
+        train_data = TRAIN_DATA
+    if test_data is None:
+        test_data = TEST_DATA
+    if epochs is None:
+        epochs = EPOCHS
+
     print("=" * 70)
     print("  [开始训练]")
     print("=" * 70)
     print()
-    print(f"  训练集大小：{len(TRAIN_DATA)} 条")
-    print(f"  测试集大小：{len(TEST_DATA)} 条")
+    print(f"  训练集大小：{len(train_data)} 条")
+    print(f"  测试集大小：{len(test_data)} 条")
     print(f"  Batch Size：{BATCH_SIZE}")
     print(f"  学习率：{LEARNING_RATE}")
-    print(f"  Epochs：{EPOCHS}")
+    print(f"  Epochs：{epochs}")
     print(f"  Max Length：{MAX_LENGTH}")
     print()
 
     # ── 构建 DataLoader ──
-    train_dataset = MovieReviewDataset(TRAIN_DATA, tokenizer)
-    test_dataset = MovieReviewDataset(TEST_DATA, tokenizer)
+    train_dataset = MovieReviewDataset(train_data, tokenizer)
+    test_dataset = MovieReviewDataset(test_data, tokenizer)
 
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
@@ -312,7 +466,7 @@ def train(model, tokenizer):
 
     # ── 优化器 + 学习率调度器 ──
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
-    total_steps = len(train_loader) * EPOCHS
+    total_steps = len(train_loader) * epochs
     scheduler = get_linear_schedule_with_warmup(
         optimizer,
         num_warmup_steps=WARMUP_STEPS,
@@ -330,7 +484,7 @@ def train(model, tokenizer):
     best_acc = 0.0
     best_model_state = None
 
-    for epoch in range(EPOCHS):
+    for epoch in range(epochs):
         model.train()
         epoch_loss = 0.0
         epoch_correct = 0
@@ -377,7 +531,7 @@ def train(model, tokenizer):
             best_model_state = copy.deepcopy(model.state_dict())
 
         print(
-            f"  Epoch {epoch + 1}/{EPOCHS} | "
+            f"  Epoch {epoch + 1}/{epochs} | "
             f"耗时: {elapsed:.1f}s | "
             f"训练 Loss: {avg_train_loss:.4f} | "
             f"训练 Acc: {train_acc:.2%} | "
@@ -465,13 +619,18 @@ def demo_inference(model, tokenizer):
 #  7. 对比实验：冻结底层 vs 全量微调
 # ══════════════════════════════════════════════════════════════════════
 
-def demo_frozen_layers(model, tokenizer):
+def demo_frozen_layers(model, tokenizer, train_data=None, test_data=None):
     """演示冻结 BERT 底层、仅训练分类头的效果。
 
     这是一种常见的微调策略：
       - 冻结底层：只训练分类头（快速，但效果有限）
       - 全量微调：训练所有参数（效果好，需要更多资源）
     """
+    if train_data is None:
+        train_data = TRAIN_DATA
+    if test_data is None:
+        test_data = TEST_DATA
+
     print("=" * 70)
     print("  [对比实验] 冻结底层 vs 全量微调")
     print("=" * 70)
@@ -502,9 +661,17 @@ def demo_frozen_layers(model, tokenizer):
           f"({trainable_params / total_params * 100:.1f}%)")
     print(f"  冻结了 BERT 的 {total_params - trainable_params:,} 个参数")
 
-    # 用相同数据和超参数训练（但只跑 3 个 epoch）
-    train_dataset = MovieReviewDataset(TRAIN_DATA, tokenizer)
-    test_dataset = MovieReviewDataset(TEST_DATA, tokenizer)
+    # 对于 IMDB 大数据集，只取少量做快速对比
+    if len(train_data) > 500:
+        import random
+        train_data = random.Random(42).sample(train_data, 200)
+        print(f"  (从大数据集抽样 200 条做快速对比)")
+    if len(test_data) > 500:
+        import random
+        test_data = random.Random(42).sample(test_data, 100)
+
+    train_dataset = MovieReviewDataset(train_data, tokenizer)
+    test_dataset = MovieReviewDataset(test_data, tokenizer)
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
@@ -513,7 +680,8 @@ def demo_frozen_layers(model, tokenizer):
         lr=1e-3,  # 仅训练分类头时可用更大的学习率
     )
 
-    for epoch in range(3):
+    num_epochs = min(3, EPOCHS)
+    for epoch in range(num_epochs):
         frozen_model.train()
         for batch in train_loader:
             input_ids = batch["input_ids"].to(DEVICE)
@@ -531,8 +699,7 @@ def demo_frozen_layers(model, tokenizer):
             optimizer.step()
 
         test_loss, test_acc = evaluate(frozen_model, test_loader)
-        train_loss, train_acc = evaluate(frozen_model, train_loader)
-        print(f"  Epoch {epoch + 1}/3 | 测试 Loss: {test_loss:.4f} | 测试 Acc: {test_acc:.2%}")
+        print(f"  Epoch {epoch + 1}/{num_epochs} | 测试 Loss: {test_loss:.4f} | 测试 Acc: {test_acc:.2%}")
 
     print()
     print(f"  ── 对比总结 ──")
@@ -575,24 +742,40 @@ def demo_data_augmentation():
     print("  ── 数据质量清单 ──")
     print("  ☐ 类别平衡（正面/负面比例接近 1:1）")
     print("  ☐ 覆盖多种表达方式（强烈/温和/反讽）")
-    print("  ☐ 多语言覆盖（本演示中英混合）")
+    print("  ☐ 多语言覆盖（手写数据中英混合，IMDB 纯英文）")
     print("  ☐ 测试集与训练集无重叠")
     print("  ☐ 测试集包含模型未见过的表达方式")
     print()
-    print("  ── 本演示的数据概况 ──")
-    pos_count = sum(1 for _, label in TRAIN_DATA if label == 1)
-    neg_count = sum(1 for _, label in TRAIN_DATA if label == 0)
-    print(f"  训练集：{len(TRAIN_DATA)} 条（正面 {pos_count} / 负面 {neg_count}）")
-    pos_test = sum(1 for _, label in TEST_DATA if label == 1)
-    neg_test = sum(1 for _, label in TEST_DATA if label == 0)
-    print(f"  测试集：{len(TEST_DATA)} 条（正面 {pos_test} / 负面 {neg_test}）")
+    print("  ── 两种数据源的对比 ──")
     print()
-    print("  ⚠ 注意：本演示的训练集仅 32 条，真实项目需要更多数据。")
-    print("     小数据集上微调容易过拟合，建议：")
-    print("     - 增加数据量（采集更多标注样本）")
-    print("     - 使用数据增强（同义改写、回译等）")
-    print("     - 使用更大的 Dropout 或早停机制")
-    print("     - 考虑冻结底层仅训练分类头")
+    pos_hand = sum(1 for _, label in TRAIN_DATA if label == 1)
+    neg_hand = sum(1 for _, label in TRAIN_DATA if label == 0)
+    print(f"  手写数据集：{len(TRAIN_DATA)} 条（正面 {pos_hand} / 负面 {neg_hand}）")
+    print(f"    ✓ 中英混合 → 适合多语言场景")
+    print(f"    ✗ 仅 32 条 → 容易过拟合，泛化能力弱")
+    print(f"    ✗ 表达方式单一 → 对\"还行\"等中性表达束手无策")
+    print()
+    if USE_IMDB_DATASET:
+        print(f"  IMDB 数据集：{IMDB_SAMPLE_SIZE:,} 条（本次抽样）")
+    print(f"  IMDB 数据集原始：50,000 条（训练 25K / 测试 25K）")
+    print(f"    ✓ 数据量大 → 泛化能力强，不易过拟合")
+    print(f"    ✓ 表达多样 → 覆盖各种风格和强度")
+    print(f"    ✓ 工业标准 → 学术论文常用基准")
+    print(f"    ✗ 仅英文 → 中文场景需额外数据")
+    print()
+    print("  ── 如何获取更多训练数据 ──")
+    print("  1. HuggingFace Hub (hf-mirror.com)")
+    print("     • imdb — 50K 电影评价（本演示已集成）")
+    print("     • rotten_tomatoes — 10K 烂番茄影评")
+    print("     • amazon_reviews_multi — 多语言 Amazon 评价")
+    print("     • yelp_review_full — 700K Yelp 评价")
+    print("  2. 数据增强技术")
+    print("     • 同义替换：用同义词替换关键词")
+    print("     • 回译：中→英→中，英→中→英")
+    print("     • Easy Data Augmentation (EDA)")
+    print("  3. 主动学习")
+    print("     • 先用少量数据训练 → 对大量未标注数据预测")
+    print("     • 找出模型最不确定的样本 → 人工标注 → 加入训练")
     print()
 
 
@@ -693,6 +876,21 @@ def main():
     print(f"     下次运行时自动检测并跳过训练，直接加载")
     print()
 
+    # ── 选择训练数据源 ──
+    train_data = TRAIN_DATA
+    test_data = TEST_DATA
+    data_source_name = "手写小数据集（32 条）"
+
+    if USE_IMDB_DATASET:
+        imdb_train, imdb_test = load_imdb_data(sample_size=IMDB_SAMPLE_SIZE)
+        if imdb_train is not None and imdb_test is not None:
+            train_data = imdb_train
+            test_data = imdb_test
+            data_source_name = f"IMDB 数据集（{len(train_data):,} 条）"
+        else:
+            print("  ⚠ IMDB 加载失败，回退到手写小数据集")
+            print()
+
     # ── 加载模型（优先本地微调模型 → 回退到 HuggingFace 下载） ──
     model, tokenizer = load_model_and_tokenizer()
 
@@ -705,8 +903,12 @@ def main():
         print(f"     {os.path.basename(SAVE_DIR)} 目录")
         print("=" * 70)
     else:
-        # 首次运行，执行训练
-        _ = train(model, tokenizer)  # 训练完成后模型参数已在 model 中
+        # 执行训练
+        if USE_IMDB_DATASET:
+            print(f"  🏷 数据源：{data_source_name}")
+            print()
+
+        _ = train(model, tokenizer, train_data=train_data, test_data=test_data)
 
     # ── 推理演示 ──
     demo_inference(model, tokenizer)
@@ -726,7 +928,10 @@ def main():
     print("=" * 70)
     print()
     print("  1. 数据准备")
-    print("     └─ 收集标注数据 → 分词 → DataLoader")
+    if USE_IMDB_DATASET:
+        print("     └─ IMDB 数据集（25K 条）→ load_dataset('imdb')")
+    else:
+        print("     └─ 手写标注数据（32 条）→ 分词 → DataLoader")
     print()
     print("  2. 模型准备")
     print("     └─ 加载预训练 BERT → 添加分类头 → 移至设备")
@@ -747,8 +952,10 @@ def main():
     print("  ── 关键超参数 ──")
     print(f"  学习率：{LEARNING_RATE}（微调用 2e-5~5e-5）")
     print(f"  Batch Size：{BATCH_SIZE}（取决于 GPU 内存）")
-    print(f"  Epochs：{EPOCHS}（小数据集 3~5，大数据集 2~3）")
+    print(f"  Epochs：{EPOCHS}（数据集越大，epochs 可越少）")
     print(f"  Max Length：{MAX_LENGTH}（根据任务调整）")
+    if USE_IMDB_DATASET:
+        print(f"  IMDB 抽样：{IMDB_SAMPLE_SIZE:,} 条（设 0 使用全部 25K）")
     print()
     print("  ── 微调 vs 零样本 vs 从头训练 ──")
     print("  零样本（本目录 bert_movie_review_classifier.py）：")
